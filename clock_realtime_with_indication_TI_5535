@@ -1,0 +1,147 @@
+Int16 left_input;
+Int16 right_input;
+Int16 left_output;
+Int16 right_output;
+Int16 mono_input;
+
+Uint16 last_secIntrCnt = 99; 
+Uint16 last_alarmIntrCnt = 99;
+
+#define SAMPLES_PER_SECOND 8000L
+#define GAIN_IN_dB         30
+
+unsigned long int i = 0;
+
+
+void main( void ) 
+{
+	char time_str[17];
+	int hh, mm, ss;
+	
+	
+	
+	/*CSL_RtcTime       pGetRtcTime;
+    CSL_status         status;*/
+    /* Initialize BSL */
+    USBSTK5505_init( );
+    
+    /* Initialize the Phase Locked Loop in EEPROM 40 MHz */
+     pll_frequency_setup(40);
+     
+    /* Initialise hardware interface and I2C for code */
+    aic3204_hardware_init();
+    
+    /* Initialise the AIC3204 codec */
+	aic3204_init(); 
+
+    printf("\nRunning Real Time Clock Project\n");
+    printf("<-> Audio Loopback from Stereo Line IN --> to HP/Lineout\n\n" );
+	printf("Starts with PLL at 40 MHz for normal operation. LED on\n");
+	printf("Sets PLL to 2 MHz (low power) after 10 seconds. LED off\n");
+	printf("When the alarm event occurs, sets PLL to 100 MHz (high power). LED on\n");
+		
+	oled_init();	
+    oled_display_message("                 ", "                   ");
+    
+    hh = 23;
+    mm = 59;
+    ss = 55;
+    set_sampling_frequency_and_gain(SAMPLES_PER_SECOND, GAIN_IN_dB);
+
+    asm(" bset XF");
+    
+    csl_rtc_init();
+
+    csl_rtc_interrupt_enable();
+
+    csl_rtc_start();
+    
+    csl_time_and_date_display();
+   
+    for ( i = 0  ; i < SAMPLES_PER_SECOND * 600  ;i++  )
+    {
+
+     if ( last_secIntrCnt != secIntrCnt)
+      {
+      	
+      	ss += 1;
+      	
+      	if (ss==60) {
+      		ss = 0;
+      		mm += 1;
+      	}
+      	if (mm == 60) {
+      		mm=0;
+      		hh +=1;
+      	}
+      	if (hh == 24) {
+      		hh =0;	
+      	}
+      	
+      	sprintf(time_str, "%02d:%02d:%02d         ",hh,mm,ss);
+      	oled_display_message(time_str, "                   ");
+      	
+         printf("\nRTC Sec Interrupt %d\n\n",secIntrCnt);
+
+         last_secIntrCnt = secIntrCnt; 
+         
+         if ( secIntrCnt == 10)
+           {
+           	  /* Put into low power after 10 seconds */ 
+           	  pll_frequency_setup(2);
+           	  asm (" bclr XF");
+           	  last_secIntrCnt = secIntrCnt;
+           }
+         
+      }
+
+      if ( last_alarmIntrCnt != alarmIntrCnt)
+   	   {
+    	
+   	      if ( alarmIntrCnt != 0)
+   	        {
+   	         printf("\nRTC Alarm Interrupt\n\n");		
+   	         csl_time_and_date_display();
+   	         
+   	         if ( alarmIntrCnt == 1)	
+      	      {
+      	       /* Put into high PLL frequency when first alarm event has occurred */
+      	       pll_frequency_setup (100);
+               asm (" bset XF");
+               /* Set up second alarm event */
+      	       new_alarm_time(12, 14, 14);
+      	      } 
+             else if ( alarmIntrCnt == 2)
+              {
+               /* Put into low frequency PLL when second alarm event has occurred */
+      	       pll_frequency_setup (12);
+               asm (" bclr XF");
+              }
+   	        }
+           last_alarmIntrCnt = alarmIntrCnt;
+   	   }      
+
+     aic3204_codec_read(&left_input, &right_input); // Configured for one interrupt per two channels.
+     
+     mono_input = stereo_to_mono( left_input, right_input);
+      
+     left_output = mono_input;           // Very simple processing. Replace with your own code!
+     right_output = mono_input;          // Directly connect inputs to outputs. 
+    
+     aic3204_codec_write(left_output, right_output);
+
+    }
+
+    csl_time_and_date_display();
+
+    csl_rtc_interrupt_disable();
+
+    csl_rtc_stop();
+
+
+   /* Disable I2S and put codec into reset */ 
+    aic3204_disable();
+
+    printf( "\n***Program has Terminated***\n" );
+    SW_BREAKPOINT;
+}
